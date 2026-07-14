@@ -1,31 +1,25 @@
 FROM python:3.11-slim
 
-LABEL maintainer="MeetLink"
-LABEL description="MeetLink Backend - Telegram Logger + File Sharing + Recording Converter"
+# Install FFmpeg for video conversion
+RUN apt-get update && \
+    apt-get install -y ffmpeg && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Install ffmpeg for video/audio conversion (WebM → MP4 + MP3)
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ffmpeg \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install Python dependencies
+# Copy requirements and install dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy server code and modules
+# Copy application code
 COPY . .
 
-# Create directories
-RUN mkdir -p /tmp/meetlink_recordings /tmp/meetlink_uploads
+# Create temp directories
+RUN mkdir -p /tmp/securecam_uploads /tmp/securecam_mp4
 
-# Expose port 8080
+# Expose port
 EXPOSE 8080
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8080/api/status')" || exit 1
-
-# Run
-CMD ["python", "server.py"]
+# Run with gunicorn for production
+CMD gunicorn --bind 0.0.0.0:$PORT --workers 2 --threads 4 --timeout 300 server:app
